@@ -188,14 +188,51 @@ function diplebill_woo_render_settings_page() {
         update_option('diplebill_api_token', sanitize_text_field($_POST['diplebill_api_token']));
         update_option('diplebill_safety_stock_default', intval($_POST['diplebill_safety_stock_default']));
         
-        if (isset($_POST['diplebill_store_id'])) {
-            update_option('diplebill_store_id', sanitize_text_field($_POST['diplebill_store_id']));
-        }
-        if (isset($_POST['diplebill_inventory_id'])) {
-            update_option('diplebill_inventory_id', sanitize_text_field($_POST['diplebill_inventory_id']));
-        }
+        $token = sanitize_text_field($_POST['diplebill_api_token']);
+        $store_id = isset($_POST['diplebill_store_id']) ? sanitize_text_field($_POST['diplebill_store_id']) : '';
+        $inventory_id = isset($_POST['diplebill_inventory_id']) ? sanitize_text_field($_POST['diplebill_inventory_id']) : '';
+        $woo_consumer_key = isset($_POST['diplebill_woo_consumer_key']) ? sanitize_text_field($_POST['diplebill_woo_consumer_key']) : '';
+        $woo_consumer_secret = isset($_POST['diplebill_woo_consumer_secret']) ? sanitize_text_field($_POST['diplebill_woo_consumer_secret']) : '';
 
-        echo '<div class="updated"><p>Configuración general guardada correctamente.</p></div>';
+        update_option('diplebill_store_id', $store_id);
+        update_option('diplebill_inventory_id', $inventory_id);
+        update_option('diplebill_woo_consumer_key', $woo_consumer_key);
+        update_option('diplebill_woo_consumer_secret', $woo_consumer_secret);
+
+        // Si tenemos todos los datos necesarios, registrar o actualizar la integración en la API de Dipledev
+        if (!empty($token) && !empty($store_id) && !empty($inventory_id) && !empty($woo_consumer_key) && !empty($woo_consumer_secret)) {
+            $api_url = diplebill_woo_get_api_url();
+            $register_response = wp_remote_post(rtrim($api_url, '/') . '/api/v1/woocommerce/integration', [
+                'headers' => [
+                    'Authorization' => 'Bearer ' . $token,
+                    'Content-Type'  => 'application/json',
+                    'Accept'        => 'application/json'
+                ],
+                'body'    => json_encode([
+                    'store_id' => $store_id,
+                    'inventory_id' => $inventory_id,
+                    'woo_store_url' => site_url(),
+                    'woo_consumer_key' => $woo_consumer_key,
+                    'woo_consumer_secret' => $woo_consumer_secret,
+                    'status' => true
+                ]),
+                'timeout' => 20
+            ]);
+
+            if (is_wp_error($register_response)) {
+                echo '<div class="error"><p>Configuración local guardada, pero falló el registro en la API de DipleBill: ' . esc_html($register_response->get_error_message()) . '</p></div>';
+            } else {
+                $code = wp_remote_retrieve_response_code($register_response);
+                if ($code === 200 || $code === 201) {
+                    echo '<div class="updated"><p>Configuración general guardada y registrada con éxito en la API de DipleBill.</p></div>';
+                } else {
+                    $body = wp_remote_retrieve_body($register_response);
+                    echo '<div class="error"><p>Configuración local guardada, pero la API de DipleBill rechazó las credenciales (HTTP ' . $code . '): ' . esc_html($body) . '</p></div>';
+                }
+            }
+        } else {
+            echo '<div class="updated"><p>Configuración general guardada localmente.</p></div>';
+        }
     }
 
     // Procesar acción de conectar y cargar catálogos
@@ -360,6 +397,8 @@ function diplebill_woo_render_settings_page() {
     $safety_stock_default = get_option('diplebill_safety_stock_default', '0');
     $selected_store = get_option('diplebill_store_id', '');
     $selected_inventory = get_option('diplebill_inventory_id', '');
+    $woo_consumer_key = get_option('diplebill_woo_consumer_key', '');
+    $woo_consumer_secret = get_option('diplebill_woo_consumer_secret', '');
 
     $stores = get_option('diplebill_stores_cache', []);
     $inventories = get_option('diplebill_inventories_cache', []);
@@ -431,6 +470,23 @@ function diplebill_woo_render_settings_page() {
                                     <?php endforeach; ?>
                                 </select>
                                 <p class="description">Las existencias de la web se actualizarán desde este inventario.</p>
+                            </td>
+                        </tr>
+                    </table>
+
+                    <h2 class="title">API de WooCommerce (para Sincronización Bidireccional)</h2>
+                    <table class="form-table">
+                        <tr valign="top">
+                            <th scope="row">WooCommerce Consumer Key</th>
+                            <td>
+                                <input type="text" name="diplebill_woo_consumer_key" value="<?php echo esc_attr($woo_consumer_key); ?>" class="regular-text" placeholder="ck_..." required />
+                                <p class="description">Genera las llaves de lectura/escritura en: WooCommerce &gt; Ajustes &gt; Avanzado &gt; API REST.</p>
+                            </td>
+                        </tr>
+                        <tr valign="top">
+                            <th scope="row">WooCommerce Consumer Secret</th>
+                            <td>
+                                <input type="password" name="diplebill_woo_consumer_secret" value="<?php echo esc_attr($woo_consumer_secret); ?>" class="regular-text" placeholder="cs_..." required />
                             </td>
                         </tr>
                     </table>
