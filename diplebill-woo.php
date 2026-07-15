@@ -131,7 +131,7 @@ function diplebill_woo_fetch_all_products() {
     $has_more = true;
 
     while ($has_more && $page < 15) { // Límite de 15 páginas (1500 productos) para evitar timeouts
-        $response = wp_remote_get($api_url . '/v1/products?per_page=100&page=' . $page, [
+        $response = wp_remote_get($api_url . '/api/v1/products?per_page=100&page=' . $page, [
             'headers' => [
                 'Authorization' => 'Bearer ' . $token,
                 'Accept'        => 'application/json'
@@ -204,7 +204,7 @@ function diplebill_woo_render_settings_page() {
 
         if (!empty($token)) {
             // Obtener tiendas
-            $stores_response = wp_remote_get($api_url . '/v1/stores', [
+            $stores_response = wp_remote_get($api_url . '/api/v1/stores', [
                 'headers' => [
                     'Authorization' => 'Bearer ' . $token,
                     'Accept'        => 'application/json'
@@ -213,7 +213,7 @@ function diplebill_woo_render_settings_page() {
             ]);
 
             // Obtener inventarios
-            $inventories_response = wp_remote_get($api_url . '/v1/inventories', [
+            $inventories_response = wp_remote_get($api_url . '/api/v1/inventories', [
                 'headers' => [
                     'Authorization' => 'Bearer ' . $token,
                     'Accept'        => 'application/json'
@@ -222,7 +222,7 @@ function diplebill_woo_render_settings_page() {
             ]);
 
             if (is_wp_error($stores_response) || is_wp_error($inventories_response)) {
-                $connection_error = 'Error al comunicarse con la API de DipleBill: ' . 
+                $connection_error = 'Error al comunicarse con la API de DipleBill en ' . esc_url($api_url . '/api/v1/stores') . ': ' . 
                     (is_wp_error($stores_response) ? $stores_response->get_error_message() : $inventories_response->get_error_message());
             } else {
                 $stores_code = wp_remote_retrieve_response_code($stores_response);
@@ -241,7 +241,7 @@ function diplebill_woo_render_settings_page() {
                     update_option('diplebill_inventories_cache', $inventories_list);
                     $connection_success = true;
                 } else {
-                    $connection_error = 'API de DipleBill retornó código HTTP: ' . $stores_code . '. Verifica tus credenciales.';
+                    $connection_error = 'La API de DipleBill en ' . esc_url($api_url . '/api/v1/stores') . ' retornó código HTTP: ' . $stores_code . '. Verifica tus credenciales.';
                 }
             }
         } else {
@@ -780,7 +780,7 @@ function diplebill_woo_sync_order_to_diplebill($order_id) {
         'seller_id'        => null // Vendedor en blanco
     ];
 
-    $response = wp_remote_post(rtrim($api_url, '/') . '/v1/invoices', [
+    $response = wp_remote_post(rtrim($api_url, '/') . '/api/v1/invoices', [
         'headers' => [
             'Authorization' => 'Bearer ' . $token,
             'Content-Type'  => 'application/json',
