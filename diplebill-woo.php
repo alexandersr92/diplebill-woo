@@ -113,7 +113,8 @@ function diplebill_woo_get_api_url() {
     if (defined('DIPLEBILL_API_URL')) {
         return rtrim(DIPLEBILL_API_URL, '/');
     }
-    return 'https://api.diplebill.com';
+    return 'http://inventory_api.test';
+    // return 'https://api.diplebill.com';
 }
 
 /**
@@ -762,6 +763,20 @@ function diplebill_woo_sync_order_to_diplebill($order_id) {
         ];
     }
 
+    $mapped_method = diplebill_woo_map_payment_method($order->get_payment_method());
+    $payment_metadata = [];
+    if ($mapped_method === 'TRANSFER') {
+        $payment_metadata = [
+            'bank' => 'WooCommerce',
+            'reference' => 'Pedido #' . $order->get_order_number()
+        ];
+    } elseif ($mapped_method === 'CARD') {
+        $payment_metadata = [
+            'card_last_four' => '0000',
+            'reference' => $order->get_transaction_id() ? $order->get_transaction_id() : 'Pedido #' . $order->get_order_number()
+        ];
+    }
+
     // Registrar la factura en DipleBill
     $invoice_payload = [
         'store_id'         => $store_id,
@@ -773,8 +788,9 @@ function diplebill_woo_sync_order_to_diplebill($order_id) {
         'discount'         => $order->get_discount_total(),
         'tax'              => $order->get_total_tax(),
         'grand_total'      => $order->get_total(),
-        'payment_method'   => 'CASH', // Registrar venta de contado
+        'payment_method'   => $mapped_method,
         'payment_date'     => date('Y-m-d H:i:s'),
+        'payment_metadata' => $payment_metadata,
         'products'         => $products,
         'source'           => 'ECOMMERCE',
         'seller_id'        => null // Vendedor en blanco
@@ -820,3 +836,42 @@ function Log_diplebill_error($msg) {
         error_log("[DipleBill WooCommerce Connector] " . $msg);
     }
 }
+
+/**
+ * Mapear método de pago de WooCommerce a DipleBill
+ */
+function diplebill_woo_map_payment_method($method_id) {
+    $method_id = strtolower($method_id);
+    
+    if ($method_id === 'bacs' || $method_id === 'cheque' || strpos($method_id, 'transfer') !== false) {
+        return 'TRANSFER';
+    }
+    
+    if ($method_id === 'stripe' || $method_id === 'paypal' || strpos($method_id, 'card') !== false || strpos($method_id, 'credit') !== false) {
+        return 'CARD';
+    }
+    
+    return 'CASH';
+}
+
+/**
+ * Mostrar el número de factura en la administración del pedido
+ */
+function diplebill_woo_display_invoice_number_in_admin($order) {
+    $invoice_number = get_post_meta($order->get_id(), '_diplebill_invoice_number', true);
+    if (!empty($invoice_number)) {
+        echo '<p><strong>' . esc_html__('Factura DipleBill', 'diplebill-woo') . ':</strong> ' . esc_html($invoice_number) . '</p>';
+    }
+}
+add_action('woocommerce_admin_order_data_after_billing_address', 'diplebill_woo_display_invoice_number_in_admin');
+
+/**
+ * Mostrar el número de factura en la página de agradecimiento
+ */
+function diplebill_woo_display_invoice_number_on_thankyou($order_id) {
+    $invoice_number = get_post_meta($order_id, '_diplebill_invoice_number', true);
+    if (!empty($invoice_number)) {
+        echo '<p><strong>' . esc_html__('Factura DipleBill', 'diplebill-woo') . ':</strong> ' . esc_html($invoice_number) . '</p>';
+    }
+}
+add_action('woocommerce_thankyou', 'diplebill_woo_display_invoice_number_on_thankyou');
