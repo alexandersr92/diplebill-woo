@@ -79,12 +79,21 @@ function diplebill_woo_add_settings_menu() {
 }
 
 /**
+ * Obtener la URL de la API de DipleBill
+ */
+function diplebill_woo_get_api_url() {
+    if (defined('DIPLEBILL_API_URL')) {
+        return rtrim(DIPLEBILL_API_URL, '/');
+    }
+    return 'https://api.diplebill.com';
+}
+
+/**
  * Renderizar la página de configuración
  */
 function diplebill_woo_render_settings_page() {
     // Procesar envío del formulario
     if (isset($_POST['diplebill_save_settings']) && check_admin_referer('diplebill_woo_settings_nonce')) {
-        update_option('diplebill_api_url', esc_url_raw($_POST['diplebill_api_url']));
         update_option('diplebill_api_token', sanitize_text_field($_POST['diplebill_api_token']));
         update_option('diplebill_safety_stock_default', intval($_POST['diplebill_safety_stock_default']));
         
@@ -102,12 +111,12 @@ function diplebill_woo_render_settings_page() {
     $connection_error = '';
     $connection_success = false;
     if (isset($_POST['diplebill_test_connection']) && check_admin_referer('diplebill_woo_settings_nonce')) {
-        $api_url = esc_url_raw($_POST['diplebill_api_url']);
+        $api_url = diplebill_woo_get_api_url();
         $token = sanitize_text_field($_POST['diplebill_api_token']);
 
-        if (!empty($api_url) && !empty($token)) {
+        if (!empty($token)) {
             // Obtener tiendas
-            $stores_response = wp_remote_get(rtrim($api_url, '/') . '/v1/stores', [
+            $stores_response = wp_remote_get($api_url . '/v1/stores', [
                 'headers' => [
                     'Authorization' => 'Bearer ' . $token,
                     'Accept'        => 'application/json'
@@ -116,7 +125,7 @@ function diplebill_woo_render_settings_page() {
             ]);
 
             // Obtener inventarios
-            $inventories_response = wp_remote_get(rtrim($api_url, '/') . '/v1/inventories', [
+            $inventories_response = wp_remote_get($api_url . '/v1/inventories', [
                 'headers' => [
                     'Authorization' => 'Bearer ' . $token,
                     'Accept'        => 'application/json'
@@ -148,11 +157,10 @@ function diplebill_woo_render_settings_page() {
                 }
             }
         } else {
-            $connection_error = 'Debes especificar la URL de la API y el Token antes de conectar.';
+            $connection_error = 'Debes especificar el Token antes de conectar.';
         }
     }
 
-    $api_url = get_option('diplebill_api_url', '');
     $api_token = get_option('diplebill_api_token', '');
     $safety_stock_default = get_option('diplebill_safety_stock_default', '0');
     $selected_store = get_option('diplebill_store_id', '');
@@ -177,12 +185,6 @@ function diplebill_woo_render_settings_page() {
             
             <h2 class="title">Credenciales de API</h2>
             <table class="form-table">
-                <tr valign="top">
-                    <th scope="row">URL de la API DipleBill</th>
-                    <td>
-                        <input type="url" name="diplebill_api_url" value="<?php echo esc_url($api_url); ?>" class="regular-text" placeholder="https://api.diplebill.com" required />
-                    </td>
-                </tr>
                 <tr valign="top">
                     <th scope="row">Token de Acceso Personal (Bearer)</th>
                     <td>
@@ -390,12 +392,12 @@ function diplebill_woo_sync_order_to_diplebill($order_id) {
     }
 
     $order = wc_get_order($order_id);
-    $api_url = get_option('diplebill_api_url', '');
+    $api_url = diplebill_woo_get_api_url();
     $token = get_option('diplebill_api_token', '');
     $store_id = get_option('diplebill_store_id', '');
     $inventory_id = get_option('diplebill_inventory_id', '');
 
-    if (empty($api_url) || empty($token) || empty($store_id)) {
+    if (empty($token) || empty($store_id)) {
         Log_diplebill_error("Falta configuración del conector DipleBill. Sincronización cancelada.");
         return;
     }
