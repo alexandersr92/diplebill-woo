@@ -1,0 +1,16 @@
+# WordPress and Composer files
+vendor/
+composer.lock
+
+# IDEs
+.idea/
+.vscode/
+*.suo
+*.ntvs*
+*.njsproj
+*.sln
+*.swp
+
+# OS Files
+.DS_Store
+Thumbs.db
