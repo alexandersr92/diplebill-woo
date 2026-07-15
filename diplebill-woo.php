@@ -15,6 +15,13 @@ if (!defined('ABSPATH')) {
     exit;
 }
 
+// Permitir Autenticación Básica sobre HTTP en entornos locales/desarrollo
+if (isset($_SERVER['REQUEST_URI']) && strpos($_SERVER['REQUEST_URI'], '/wp-json/wc/') !== false) {
+    if (isset($_GET['consumer_key']) || isset($_SERVER['PHP_AUTH_USER']) || isset($_SERVER['HTTP_AUTHORIZATION'])) {
+        $_SERVER['HTTPS'] = 'on';
+    }
+}
+
 /**
  * Verificar dependencias
  */
