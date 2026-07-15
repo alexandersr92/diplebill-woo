@@ -61,8 +61,36 @@ function diplebill_woo_init() {
     // Enviar orden de venta al completar pago
     add_action('woocommerce_order_status_processing', 'diplebill_woo_sync_order_to_diplebill');
     add_action('woocommerce_order_status_completed', 'diplebill_woo_sync_order_to_diplebill');
+
+    // Interceptar búsquedas de la API REST de WooCommerce para buscar por SKU mapeado
+    add_filter('woocommerce_rest_product_object_query', 'diplebill_woo_rest_product_by_mapped_sku', 10, 2);
+    add_filter('woocommerce_rest_product_variation_object_query', 'diplebill_woo_rest_product_by_mapped_sku', 10, 2);
 }
 add_action('plugins_loaded', 'diplebill_woo_init');
+
+/**
+ * Permitir buscar productos en la API REST de WooCommerce por el SKU mapeado
+ */
+function diplebill_woo_rest_product_by_mapped_sku($args, $request) {
+    if (isset($request['sku']) && !empty($request['sku'])) {
+        $sku = sanitize_text_field($request['sku']);
+        $args['meta_query'] = [
+            'relation' => 'OR',
+            [
+                'key'     => '_sku',
+                'value'   => $sku,
+                'compare' => '='
+            ],
+            [
+                'key'     => '_diplebill_mapped_sku',
+                'value'   => $sku,
+                'compare' => '='
+            ]
+        ];
+        unset($args['sku']);
+    }
+    return $args;
+}
 
 /**
  * Registrar página de administración
@@ -89,11 +117,73 @@ function diplebill_woo_get_api_url() {
 }
 
 /**
+ * Descargar todos los productos de DipleBill POS manejando paginación
+ */
+function diplebill_woo_fetch_all_products() {
+    $api_url = diplebill_woo_get_api_url();
+    $token = get_option('diplebill_api_token', '');
+    if (empty($token)) {
+        return [];
+    }
+
+    $all_products = [];
+    $page = 1;
+    $has_more = true;
+
+    while ($has_more && $page < 15) { // Límite de 15 páginas (1500 productos) para evitar timeouts
+        $response = wp_remote_get($api_url . '/v1/products?per_page=100&page=' . $page, [
+            'headers' => [
+                'Authorization' => 'Bearer ' . $token,
+                'Accept'        => 'application/json'
+            ],
+            'timeout' => 20
+        ]);
+
+        if (is_wp_error($response)) {
+            break;
+        }
+
+        $code = wp_remote_retrieve_response_code($response);
+        if ($code !== 200) {
+            break;
+        }
+
+        $body = wp_remote_retrieve_body($response);
+        $data = json_decode($body, true);
+        
+        $products = isset($data['data']) ? $data['data'] : [];
+        if (empty($products)) {
+            $has_more = false;
+        } else {
+            $all_products = array_merge($all_products, $products);
+            
+            $meta = isset($data['meta']) ? $data['meta'] : [];
+            $current_page = isset($meta['current_page']) ? $meta['current_page'] : $page;
+            $last_page = isset($meta['last_page']) ? $meta['last_page'] : $page;
+            
+            if ($current_page >= $last_page) {
+                $has_more = false;
+            } else {
+                $page++;
+            }
+        }
+    }
+
+    return $all_products;
+}
+
+/**
  * Renderizar la página de configuración
  */
 function diplebill_woo_render_settings_page() {
-    // Procesar envío del formulario
-    if (isset($_POST['diplebill_save_settings']) && check_admin_referer('diplebill_woo_settings_nonce')) {
+    $current_tab = isset($_GET['tab']) ? sanitize_text_field($_GET['tab']) : 'general';
+    
+    // Procesar envíos y acciones comunes
+    $connection_error = '';
+    $connection_success = false;
+
+    // Procesar envío de pestaña general
+    if ($current_tab === 'general' && isset($_POST['diplebill_save_settings']) && check_admin_referer('diplebill_woo_settings_nonce')) {
         update_option('diplebill_api_token', sanitize_text_field($_POST['diplebill_api_token']));
         update_option('diplebill_safety_stock_default', intval($_POST['diplebill_safety_stock_default']));
         
@@ -104,13 +194,11 @@ function diplebill_woo_render_settings_page() {
             update_option('diplebill_inventory_id', sanitize_text_field($_POST['diplebill_inventory_id']));
         }
 
-        echo '<div class="updated"><p>Configuración guardada correctamente.</p></div>';
+        echo '<div class="updated"><p>Configuración general guardada correctamente.</p></div>';
     }
 
     // Procesar acción de conectar y cargar catálogos
-    $connection_error = '';
-    $connection_success = false;
-    if (isset($_POST['diplebill_test_connection']) && check_admin_referer('diplebill_woo_settings_nonce')) {
+    if ($current_tab === 'general' && isset($_POST['diplebill_test_connection']) && check_admin_referer('diplebill_woo_settings_nonce')) {
         $api_url = diplebill_woo_get_api_url();
         $token = sanitize_text_field($_POST['diplebill_api_token']);
 
@@ -161,6 +249,112 @@ function diplebill_woo_render_settings_page() {
         }
     }
 
+    // Procesar envío de mapeo
+    if ($current_tab === 'mapping' && isset($_POST['diplebill_save_mappings']) && check_admin_referer('diplebill_woo_mappings_nonce')) {
+        $mappings = isset($_POST['diplebill_map']) ? $_POST['diplebill_map'] : [];
+        foreach ($mappings as $woo_id => $mapped_sku) {
+            update_post_meta(intval($woo_id), '_diplebill_mapped_sku', sanitize_text_field($mapped_sku));
+        }
+        echo '<div class="updated"><p>Mapeo de productos guardado correctamente.</p></div>';
+    }
+
+    // Procesar acciones de importación
+    $cached_products = get_option('diplebill_products_cache', []);
+    if ($current_tab === 'import') {
+        // 1. Sincronizar catálogo local
+        if (isset($_POST['diplebill_sync_catalog']) && check_admin_referer('diplebill_woo_import_nonce')) {
+            $products = diplebill_woo_fetch_all_products();
+            if (!empty($products)) {
+                update_option('diplebill_products_cache', $products);
+                $cached_products = $products;
+                echo '<div class="updated"><p>Catálogo de DipleBill cargado exitosamente en caché. Se encontraron ' . count($products) . ' productos.</p></div>';
+            } else {
+                echo '<div class="error"><p>No se pudieron obtener productos de la API de DipleBill. Revisa tu token y conexión.</p></div>';
+            }
+        }
+
+        // 2. Importar en WooCommerce
+        if (isset($_POST['diplebill_run_import']) && check_admin_referer('diplebill_woo_import_nonce')) {
+            if (empty($cached_products)) {
+                echo '<div class="error"><p>Primero debes sincronizar el catálogo de DipleBill para cargarlo en caché.</p></div>';
+            } else {
+                $imported_count = 0;
+                $updated_count = 0;
+                $inventory_id = get_option('diplebill_inventory_id', '');
+
+                foreach ($cached_products as $dp) {
+                    $sku = $dp['sku'];
+                    if (empty($sku)) {
+                        continue;
+                    }
+
+                    // Buscar si existe un producto por SKU estándar
+                    $product_id = wc_get_product_id_by_sku($sku);
+                    
+                    // Si no existe, buscar por el meta key _diplebill_mapped_sku
+                    if (!$product_id) {
+                        $posts = get_posts([
+                            'post_type' => ['product', 'product_variation'],
+                            'meta_query' => [
+                                [
+                                    'key' => '_diplebill_mapped_sku',
+                                    'value' => $sku,
+                                    'compare' => '='
+                                ]
+                            ],
+                            'fields' => 'ids',
+                            'posts_per_page' => 1
+                        ]);
+                        if (!empty($posts)) {
+                            $product_id = $posts[0];
+                        }
+                    }
+
+                    // Obtener stock real correspondiente al inventario seleccionado
+                    $stock_qty = 0;
+                    if (!empty($dp['inventory'])) {
+                        foreach ($dp['inventory'] as $inv_detail) {
+                            if ($inv_detail['inventory_id'] === $inventory_id) {
+                                $stock_qty = intval($inv_detail['quantity']);
+                                break;
+                            }
+                        }
+                    }
+
+                    if ($product_id) {
+                        // Existe: Actualizar precio y stock
+                        $product = wc_get_product($product_id);
+                        $product->set_regular_price($dp['price']);
+                        $product->set_manage_stock(true);
+                        $product->set_stock_quantity($stock_qty);
+                        $product->save();
+                        $updated_count++;
+                    } else {
+                        // No existe: Crear nuevo
+                        $post_id = wp_insert_post([
+                            'post_title'    => $dp['name'],
+                            'post_content'  => $dp['description'] ?? '',
+                            'post_status'   => 'publish',
+                            'post_type'     => 'product',
+                        ]);
+
+                        if ($post_id) {
+                            $product = new WC_Product_Simple($post_id);
+                            $product->set_sku($sku);
+                            $product->set_regular_price($dp['price']);
+                            $product->set_manage_stock(true);
+                            $product->set_stock_quantity($stock_qty);
+                            $product->save();
+                            $imported_count++;
+                        }
+                    }
+                }
+
+                echo '<div class="updated"><p>Proceso de importación finalizado con éxito: ' . $imported_count . ' productos creados y ' . $updated_count . ' productos actualizados en WooCommerce.</p></div>';
+            }
+        }
+    }
+
     $api_token = get_option('diplebill_api_token', '');
     $safety_stock_default = get_option('diplebill_safety_stock_default', '0');
     $selected_store = get_option('diplebill_store_id', '');
@@ -172,6 +366,13 @@ function diplebill_woo_render_settings_page() {
     <div class="wrap">
         <h1>DipleBill WooCommerce Connector</h1>
 
+        <!-- Pestañas -->
+        <h2 class="nav-tab-wrapper" style="margin-bottom: 20px;">
+            <a href="?page=diplebill-woo-connector&tab=general" class="nav-tab <?php echo $current_tab === 'general' ? 'nav-tab-active' : ''; ?>">Ajustes Generales</a>
+            <a href="?page=diplebill-woo-connector&tab=mapping" class="nav-tab <?php echo $current_tab === 'mapping' ? 'nav-tab-active' : ''; ?>">Mapeo de Productos</a>
+            <a href="?page=diplebill-woo-connector&tab=import" class="nav-tab <?php echo $current_tab === 'import' ? 'nav-tab-active' : ''; ?>">Importar Catálogo</a>
+        </h2>
+
         <?php if (!empty($connection_error)) : ?>
             <div class="notice notice-error is-dismissible"><p><?php echo esc_html($connection_error); ?></p></div>
         <?php endif; ?>
@@ -180,73 +381,193 @@ function diplebill_woo_render_settings_page() {
             <div class="notice notice-success is-dismissible"><p>Conexión exitosa. Se han cargado las tiendas e inventarios de DipleBill.</p></div>
         <?php endif; ?>
 
-        <form method="post" action="">
-            <?php wp_nonce_field('diplebill_woo_settings_nonce'); ?>
-            
-            <h2 class="title">Credenciales de API</h2>
-            <table class="form-table">
-                <tr valign="top">
-                    <th scope="row">Token de Acceso Personal (Bearer)</th>
-                    <td>
-                        <input type="password" name="diplebill_api_token" value="<?php echo esc_attr($api_token); ?>" class="regular-text" required />
-                        <p class="description">Token generado en tu cuenta de administrador de DipleBill POS.</p>
-                    </td>
-                </tr>
-            </table>
-
-            <p class="submit">
-                <input type="submit" name="diplebill_test_connection" class="button button-secondary" value="Probar Conexión y Cargar Catálogos" />
-            </p>
-
-            <?php if (!empty($stores) || !empty($inventories)) : ?>
-                <h2 class="title">Asociación de Sucursal e Inventario</h2>
+        <!-- Renderizado de Pestaña General -->
+        <?php if ($current_tab === 'general') : ?>
+            <form method="post" action="">
+                <?php wp_nonce_field('diplebill_woo_settings_nonce'); ?>
+                
+                <h2 class="title">Credenciales de API</h2>
                 <table class="form-table">
                     <tr valign="top">
-                        <th scope="row">Tienda / Sucursal Asignada</th>
+                        <th scope="row">Token de Acceso Personal (Bearer)</th>
                         <td>
-                            <select name="diplebill_store_id" class="postform">
-                                <option value="">Selecciona una tienda</option>
-                                <?php foreach ($stores as $store) : ?>
-                                    <option value="<?php echo esc_attr($store['id']); ?>" <?php selected($selected_store, $store['id']); ?>>
-                                        <?php echo esc_html($store['name']); ?>
-                                    </option>
-                                <?php endforeach; ?>
-                            </select>
-                            <p class="description">Las facturas creadas desde la web se asociarán a esta sucursal.</p>
-                        </td>
-                    </tr>
-                    <tr valign="top">
-                        <th scope="row">Inventario de Sincronización</th>
-                        <td>
-                            <select name="diplebill_inventory_id" class="postform">
-                                <option value="">Selecciona un inventario</option>
-                                <?php foreach ($inventories as $inventory) : ?>
-                                    <option value="<?php echo esc_attr($inventory['id']); ?>" <?php selected($selected_inventory, $inventory['id']); ?>>
-                                        <?php echo esc_html($inventory['name']); ?>
-                                    </option>
-                                <?php endforeach; ?>
-                            </select>
-                            <p class="description">Las existencias de la web se actualizarán desde este inventario.</p>
+                            <input type="password" name="diplebill_api_token" value="<?php echo esc_attr($api_token); ?>" class="regular-text" required />
+                            <p class="description">Token generado en tu cuenta de administrador de DipleBill POS.</p>
                         </td>
                     </tr>
                 </table>
-            <?php endif; ?>
 
-            <h2 class="title">Configuración de Stock de Seguridad</h2>
-            <table class="form-table">
-                <tr valign="top">
-                    <th scope="row">Margen de Seguridad Global</th>
-                    <td>
-                        <input type="number" min="0" name="diplebill_safety_stock_default" value="<?php echo esc_attr($safety_stock_default); ?>" class="small-text" />
-                        <p class="description">Cantidad a restar del stock real. Si el stock real en DipleBill es 10 y el margen es 2, en la web se mostrará 8.</p>
-                    </td>
-                </tr>
-            </table>
+                <p class="submit">
+                    <input type="submit" name="diplebill_test_connection" class="button button-secondary" value="Probar Conexión y Cargar Catálogos" />
+                </p>
 
-            <p class="submit">
-                <input type="submit" name="diplebill_save_settings" class="button button-primary" value="Guardar Cambios" />
-            </p>
-        </form>
+                <?php if (!empty($stores) || !empty($inventories)) : ?>
+                    <h2 class="title">Asociación de Sucursal e Inventario</h2>
+                    <table class="form-table">
+                        <tr valign="top">
+                            <th scope="row">Tienda / Sucursal Asignada</th>
+                            <td>
+                                <select name="diplebill_store_id" class="postform">
+                                    <option value="">Selecciona una tienda</option>
+                                    <?php foreach ($stores as $store) : ?>
+                                        <option value="<?php echo esc_attr($store['id']); ?>" <?php selected($selected_store, $store['id']); ?>>
+                                            <?php echo esc_html($store['name']); ?>
+                                        </option>
+                                    <?php endforeach; ?>
+                                </select>
+                                <p class="description">Las facturas creadas desde la web se asociarán a esta sucursal.</p>
+                            </td>
+                        </tr>
+                        <tr valign="top">
+                            <th scope="row">Inventario de Sincronización</th>
+                            <td>
+                                <select name="diplebill_inventory_id" class="postform">
+                                    <option value="">Selecciona un inventario</option>
+                                    <?php foreach ($inventories as $inventory) : ?>
+                                        <option value="<?php echo esc_attr($inventory['id']); ?>" <?php selected($selected_inventory, $inventory['id']); ?>>
+                                            <?php echo esc_html($inventory['name']); ?>
+                                        </option>
+                                    <?php endforeach; ?>
+                                </select>
+                                <p class="description">Las existencias de la web se actualizarán desde este inventario.</p>
+                            </td>
+                        </tr>
+                    </table>
+                <?php endif; ?>
+
+                <h2 class="title">Configuración de Stock de Seguridad</h2>
+                <table class="form-table">
+                    <tr valign="top">
+                        <th scope="row">Margen de Seguridad Global</th>
+                        <td>
+                            <input type="number" min="0" name="diplebill_safety_stock_default" value="<?php echo esc_attr($safety_stock_default); ?>" class="small-text" />
+                            <p class="description">Cantidad a restar del stock real. Si el stock real en DipleBill es 10 y el margen es 2, en la web se mostrará 8.</p>
+                        </td>
+                    </tr>
+                </table>
+
+                <p class="submit">
+                    <input type="submit" name="diplebill_save_settings" class="button button-primary" value="Guardar Cambios" />
+                </p>
+            </form>
+        <?php endif; ?>
+
+        <!-- Renderizado de Pestaña de Mapeo -->
+        <?php if ($current_tab === 'mapping') : 
+            if (empty($selected_store) || empty($selected_inventory)) :
+                ?>
+                <div class="notice notice-warning inline" style="margin-top: 20px; padding: 15px;">
+                    <h3>⚠️ Configuración Requerida</h3>
+                    <p>Por favor, configure primero el token de API, la **Sucursal** y el **Inventario** en la pestaña <strong>Ajustes Generales</strong> y guarde los cambios antes de continuar con el mapeo de productos.</p>
+                </div>
+                <?php
+            else :
+                $paged = isset($_GET['paged']) ? intval($_GET['paged']) : 1;
+            $woo_products = new WP_Query([
+                'post_type' => ['product', 'product_variation'],
+                'posts_per_page' => 20,
+                'paged' => $paged
+            ]);
+            ?>
+            <form method="post" action="">
+                <?php wp_nonce_field('diplebill_woo_mappings_nonce'); ?>
+                <h3>Asociar Productos de WooCommerce con DipleBill</h3>
+                <p>Selecciona el producto correspondiente de DipleBill POS para cada uno de los productos de tu tienda web.</p>
+                
+                <table class="wp-list-table widefat fixed striped">
+                    <thead>
+                        <tr>
+                            <th style="width: 40%;">Producto WooCommerce (Web)</th>
+                            <th style="width: 20%;">SKU Web</th>
+                            <th style="width: 40%;">Producto Asociado de DipleBill POS</th>
+                        </tr>
+                    </thead>
+                    <tbody>
+                        <?php if ($woo_products->have_posts()) : while ($woo_products->have_posts()) : $woo_products->the_post(); 
+                            $product = wc_get_product(get_the_ID());
+                            if (!$product) continue;
+                            $current_mapped = get_post_meta($product->get_id(), '_diplebill_mapped_sku', true);
+                            ?>
+                            <tr>
+                                <td><strong><?php echo esc_html($product->get_name()); ?></strong></td>
+                                <td><code><?php echo esc_html($product->get_sku()); ?></code></td>
+                                <td>
+                                    <select name="diplebill_map[<?php echo $product->get_id(); ?>]" style="max-width: 100%; width: 350px;">
+                                        <option value="">-- No asociado (Usar SKU predeterminado) --</option>
+                                        <?php foreach ($cached_products as $dp) : ?>
+                                            <option value="<?php echo esc_attr($dp['sku']); ?>" <?php selected($current_mapped, $dp['sku']); ?>>
+                                                <?php echo esc_html($dp['name'] . ' (SKU: ' . $dp['sku'] . ')'); ?>
+                                            </option>
+                                        <?php endforeach; ?>
+                                    </select>
+                                </td>
+                            </tr>
+                        <?php endwhile; wp_reset_postdata(); else : ?>
+                            <tr><td colspan="3">No se encontraron productos en WooCommerce.</td></tr>
+                        <?php endif; ?>
+                    </tbody>
+                </table>
+                
+                <div class="tablenav">
+                    <div class="tablenav-pages" style="margin-top: 15px;">
+                        <?php
+                        echo paginate_links([
+                            'base' => add_query_arg('paged', '%#%'),
+                            'format' => '',
+                            'prev_text' => __('&laquo; Anterior'),
+                            'next_text' => __('Siguiente &raquo;'),
+                            'total' => $woo_products->max_num_pages,
+                            'current' => $paged
+                        ]);
+                        ?>
+                    </div>
+                </div>
+
+                <p class="submit">
+                    <input type="submit" name="diplebill_save_mappings" class="button button-primary" value="Guardar Mapeos" />
+                </p>
+            </form>
+        <?php endif; // Cierre del else de configuración
+              endif; // Cierre de pestaña mapping ?>
+
+        <!-- Renderizado de Pestaña de Importación -->
+        <?php if ($current_tab === 'import') : 
+            if (empty($selected_store) || empty($selected_inventory)) :
+                ?>
+                <div class="notice notice-warning inline" style="margin-top: 20px; padding: 15px;">
+                    <h3>⚠️ Configuración Requerida</h3>
+                    <p>Por favor, configure primero el token de API, la **Sucursal** y el **Inventario** en la pestaña <strong>Ajustes Generales</strong> y guarde los cambios antes de continuar con la importación de productos.</p>
+                </div>
+                <?php
+            else :
+                ?>
+                <form method="post" action="">
+                <?php wp_nonce_field('diplebill_woo_import_nonce'); ?>
+                <h3>Importador y Sincronizador de Catálogo</h3>
+                <p>Descarga el catálogo desde DipleBill y actualiza masivamente tus productos en la web.</p>
+                
+                <table class="form-table">
+                    <tr valign="top">
+                        <th scope="row">Productos en Caché Local</th>
+                        <td>
+                            <strong><?php echo count($cached_products); ?> productos</strong> cargados actualmente.
+                            <p class="description">Último catálogo descargado desde tu DipleBill POS en caché de base de datos.</p>
+                        </td>
+                    </tr>
+                </table>
+
+                <div style="margin-top: 20px;">
+                    <input type="submit" name="diplebill_sync_catalog" class="button button-secondary" value="1. Descargar / Sincronizar Catálogo de DipleBill" />
+                    <span style="margin: 0 10px;">y luego</span>
+                    <input type="submit" name="diplebill_run_import" class="button button-primary" value="2. Crear / Actualizar Productos en WooCommerce" />
+                </div>
+                
+                <p class="description" style="margin-top: 20px;">
+                    <strong>Nota Importante:</strong> El actualizador buscará conciencias por SKU. Si el producto existe, actualizará su precio e inventario físico correspondiente. Si no existe, creará un nuevo producto simple publicado.
+                </p>
+            </form>
+        <?php endif; // Cierre del else de configuración
+              endif; // Cierre de pestaña import ?>
     </div>
     <?php
 }
