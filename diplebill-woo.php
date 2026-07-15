@@ -860,18 +860,7 @@ function diplebill_woo_map_payment_method($method_id) {
 function diplebill_woo_display_invoice_number_in_admin($order) {
     $invoice_number = get_post_meta($order->get_id(), '_diplebill_invoice_number', true);
     if (!empty($invoice_number)) {
-        echo '<p><strong>' . esc_html__('Factura DipleBill', 'diplebill-woo') . ':</strong> ' . esc_html($invoice_number) . '</p>';
+        echo '<p><strong>' . esc_html__('Factura', 'diplebill-woo') . ':</strong> ' . esc_html($invoice_number) . '</p>';
     }
 }
 add_action('woocommerce_admin_order_data_after_billing_address', 'diplebill_woo_display_invoice_number_in_admin');
-
-/**
- * Mostrar el número de factura en la página de agradecimiento
- */
-function diplebill_woo_display_invoice_number_on_thankyou($order_id) {
-    $invoice_number = get_post_meta($order_id, '_diplebill_invoice_number', true);
-    if (!empty($invoice_number)) {
-        echo '<p><strong>' . esc_html__('Factura DipleBill', 'diplebill-woo') . ':</strong> ' . esc_html($invoice_number) . '</p>';
-    }
-}
-add_action('woocommerce_thankyou', 'diplebill_woo_display_invoice_number_on_thankyou');
