@@ -156,7 +156,14 @@ function diplebill_woo_fetch_all_products() {
         if (empty($products)) {
             $has_more = false;
         } else {
-            $all_products = array_merge($all_products, $products);
+            $filtered_products = [];
+            foreach ($products as $prod) {
+                if (isset($prod['sku']) && strpos(strtoupper($prod['sku']), 'WOO-') === 0) {
+                    continue;
+                }
+                $filtered_products[] = $prod;
+            }
+            $all_products = array_merge($all_products, $filtered_products);
             
             $meta = isset($data['meta']) ? $data['meta'] : [];
             $current_page = isset($meta['current_page']) ? $meta['current_page'] : $page;
