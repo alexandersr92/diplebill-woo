@@ -120,8 +120,7 @@ function diplebill_woo_get_api_url() {
     if (defined('DIPLEBILL_API_URL')) {
         return rtrim(DIPLEBILL_API_URL, '/');
     }
-    return 'http://inventory_api.test';
-    // return 'https://api.diplebill.com';
+    return get_option('diplebill_api_url', 'http://inventory_api.test');
 }
 
 /**
@@ -199,6 +198,8 @@ function diplebill_woo_render_settings_page() {
 
     // Procesar envío de pestaña general
     if ($current_tab === 'general' && isset($_POST['diplebill_save_settings']) && check_admin_referer('diplebill_woo_settings_nonce')) {
+        $api_url = isset($_POST['diplebill_api_url']) ? esc_url_raw(rtrim($_POST['diplebill_api_url'], '/')) : '';
+        update_option('diplebill_api_url', $api_url);
         update_option('diplebill_api_token', sanitize_text_field($_POST['diplebill_api_token']));
         update_option('diplebill_safety_stock_default', intval($_POST['diplebill_safety_stock_default']));
         
@@ -251,7 +252,9 @@ function diplebill_woo_render_settings_page() {
 
     // Procesar acción de conectar y cargar catálogos
     if ($current_tab === 'general' && isset($_POST['diplebill_test_connection']) && check_admin_referer('diplebill_woo_settings_nonce')) {
-        $api_url = diplebill_woo_get_api_url();
+        $api_url = isset($_POST['diplebill_api_url']) ? esc_url_raw(rtrim($_POST['diplebill_api_url'], '/')) : '';
+        update_option('diplebill_api_url', $api_url);
+        update_option('diplebill_api_token', sanitize_text_field($_POST['diplebill_api_token']));
         $token = sanitize_text_field($_POST['diplebill_api_token']);
 
         if (!empty($token)) {
@@ -407,6 +410,7 @@ function diplebill_woo_render_settings_page() {
         }
     }
 
+    $api_url = diplebill_woo_get_api_url();
     $api_token = get_option('diplebill_api_token', '');
     $safety_stock_default = get_option('diplebill_safety_stock_default', '0');
     $selected_store = get_option('diplebill_store_id', '');
@@ -441,6 +445,13 @@ function diplebill_woo_render_settings_page() {
                 
                 <h2 class="title">Credenciales de API</h2>
                 <table class="form-table">
+                    <tr valign="top">
+                        <th scope="row">URL de la API de DipleBill</th>
+                        <td>
+                            <input type="url" name="diplebill_api_url" value="<?php echo esc_url($api_url); ?>" class="regular-text" placeholder="https://api.diplebill.com" required />
+                            <p class="description">URL del servidor donde está alojada la API de tu DipleBill (ej. https://api.diplebill.com).</p>
+                        </td>
+                    </tr>
                     <tr valign="top">
                         <th scope="row">Token de Acceso Personal (Bearer)</th>
                         <td>
