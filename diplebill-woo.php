@@ -445,13 +445,7 @@ function diplebill_woo_render_settings_page() {
                 
                 <h2 class="title">Credenciales de API</h2>
                 <table class="form-table">
-                    <tr valign="top">
-                        <th scope="row">URL de la API de DipleBill</th>
-                        <td>
-                            <input type="url" name="diplebill_api_url" value="<?php echo esc_url($api_url); ?>" class="regular-text" placeholder="https://api.diplebill.com" required />
-                            <p class="description">URL del servidor donde está alojada la API de tu DipleBill (ej. https://api.diplebill.com).</p>
-                        </td>
-                    </tr>
+
                     <tr valign="top">
                         <th scope="row">Token de Acceso Personal (Bearer)</th>
                         <td>
