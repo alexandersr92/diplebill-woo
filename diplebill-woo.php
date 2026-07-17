@@ -302,7 +302,7 @@ function diplebill_woo_render_settings_page() {
     }
 
     // Procesar envío de mapeo
-    if ($current_tab === 'mapping' && isset($_POST['diplebill_save_mappings']) && check_admin_referer('diplebill_woo_mappings_nonce')) {
+    if ($current_tab === 'import' && isset($_POST['diplebill_save_mappings']) && check_admin_referer('diplebill_woo_mappings_nonce')) {
         $mappings = isset($_POST['diplebill_map']) ? $_POST['diplebill_map'] : [];
         foreach ($mappings as $woo_id => $mapped_sku) {
             update_post_meta(intval($woo_id), '_diplebill_mapped_sku', sanitize_text_field($mapped_sku));
@@ -423,7 +423,6 @@ function diplebill_woo_render_settings_page() {
         <!-- Pestañas -->
         <h2 class="nav-tab-wrapper" style="margin-bottom: 20px;">
             <a href="?page=diplebill-woo-connector&tab=general" class="nav-tab <?php echo $current_tab === 'general' ? 'nav-tab-active' : ''; ?>">Ajustes Generales</a>
-            <a href="?page=diplebill-woo-connector&tab=mapping" class="nav-tab <?php echo $current_tab === 'mapping' ? 'nav-tab-active' : ''; ?>">Mapeo de Productos</a>
             <a href="?page=diplebill-woo-connector&tab=import" class="nav-tab <?php echo $current_tab === 'import' ? 'nav-tab-active' : ''; ?>">Importar Catálogo</a>
         </h2>
 
@@ -523,84 +522,6 @@ function diplebill_woo_render_settings_page() {
             </form>
         <?php endif; ?>
 
-        <!-- Renderizado de Pestaña de Mapeo -->
-        <?php if ($current_tab === 'mapping') : 
-            if (empty($selected_store) || empty($selected_inventory)) :
-                ?>
-                <div class="notice notice-warning inline" style="margin-top: 20px; padding: 15px;">
-                    <h3>⚠️ Configuración Requerida</h3>
-                    <p>Por favor, configure primero el token de API, la **Sucursal** y el **Inventario** en la pestaña <strong>Ajustes Generales</strong> y guarde los cambios antes de continuar con el mapeo de productos.</p>
-                </div>
-                <?php
-            else :
-                $paged = isset($_GET['paged']) ? intval($_GET['paged']) : 1;
-            $woo_products = new WP_Query([
-                'post_type' => ['product', 'product_variation'],
-                'posts_per_page' => 20,
-                'paged' => $paged
-            ]);
-            ?>
-            <form method="post" action="">
-                <?php wp_nonce_field('diplebill_woo_mappings_nonce'); ?>
-                <h3>Asociar Productos de WooCommerce con DipleBill</h3>
-                <p>Selecciona el producto correspondiente de DipleBill POS para cada uno de los productos de tu tienda web.</p>
-                
-                <table class="wp-list-table widefat fixed striped">
-                    <thead>
-                        <tr>
-                            <th style="width: 40%;">Producto WooCommerce (Web)</th>
-                            <th style="width: 20%;">SKU Web</th>
-                            <th style="width: 40%;">Producto Asociado de DipleBill POS</th>
-                        </tr>
-                    </thead>
-                    <tbody>
-                        <?php if ($woo_products->have_posts()) : while ($woo_products->have_posts()) : $woo_products->the_post(); 
-                            $product = wc_get_product(get_the_ID());
-                            if (!$product) continue;
-                            $current_mapped = get_post_meta($product->get_id(), '_diplebill_mapped_sku', true);
-                            ?>
-                            <tr>
-                                <td><strong><?php echo esc_html($product->get_name()); ?></strong></td>
-                                <td><code><?php echo esc_html($product->get_sku()); ?></code></td>
-                                <td>
-                                    <select name="diplebill_map[<?php echo $product->get_id(); ?>]" style="max-width: 100%; width: 350px;">
-                                        <option value="">-- No asociado (Usar SKU predeterminado) --</option>
-                                        <?php foreach ($cached_products as $dp) : ?>
-                                            <option value="<?php echo esc_attr($dp['sku']); ?>" <?php selected($current_mapped, $dp['sku']); ?>>
-                                                <?php echo esc_html($dp['name'] . ' (SKU: ' . $dp['sku'] . ')'); ?>
-                                            </option>
-                                        <?php endforeach; ?>
-                                    </select>
-                                </td>
-                            </tr>
-                        <?php endwhile; wp_reset_postdata(); else : ?>
-                            <tr><td colspan="3">No se encontraron productos en WooCommerce.</td></tr>
-                        <?php endif; ?>
-                    </tbody>
-                </table>
-                
-                <div class="tablenav">
-                    <div class="tablenav-pages" style="margin-top: 15px;">
-                        <?php
-                        echo paginate_links([
-                            'base' => add_query_arg('paged', '%#%'),
-                            'format' => '',
-                            'prev_text' => __('&laquo; Anterior'),
-                            'next_text' => __('Siguiente &raquo;'),
-                            'total' => $woo_products->max_num_pages,
-                            'current' => $paged
-                        ]);
-                        ?>
-                    </div>
-                </div>
-
-                <p class="submit">
-                    <input type="submit" name="diplebill_save_mappings" class="button button-primary" value="Guardar Mapeos" />
-                </p>
-            </form>
-        <?php endif; // Cierre del else de configuración
-              endif; // Cierre de pestaña mapping ?>
-
         <!-- Renderizado de Pestaña de Importación -->
         <?php if ($current_tab === 'import') : 
             if (empty($selected_store) || empty($selected_inventory)) :
@@ -612,33 +533,111 @@ function diplebill_woo_render_settings_page() {
                 <?php
             else :
                 ?>
-                <form method="post" action="">
-                <?php wp_nonce_field('diplebill_woo_import_nonce'); ?>
-                <h3>Importador y Sincronizador de Catálogo</h3>
-                <p>Descarga el catálogo desde DipleBill y actualiza masivamente tus productos en la web.</p>
-                
-                <table class="form-table">
-                    <tr valign="top">
-                        <th scope="row">Productos en Caché Local</th>
-                        <td>
-                            <strong><?php echo count($cached_products); ?> productos</strong> cargados actualmente.
-                            <p class="description">Último catálogo descargado desde tu DipleBill POS en caché de base de datos.</p>
-                        </td>
-                    </tr>
-                </table>
+                <div class="diplebill-import-steps">
+                    <!-- Paso 1 -->
+                    <div class="diplebill-step-card" style="background: #fff; padding: 20px; border: 1px solid #ccd0d4; border-radius: 4px; margin-bottom: 20px; box-shadow: 0 1px 1px rgba(0,0,0,.04);">
+                        <h2 style="margin-top: 0;">Paso 1: Descargar / Actualizar Catálogo desde DipleBill</h2>
+                        <p>Descarga los productos y el stock actual del inventario seleccionado desde la API de DipleBill POS a la caché de WordPress.</p>
+                        
+                        <table class="form-table" style="margin: 0 0 15px 0;">
+                            <tr valign="top">
+                                <th scope="row" style="width: 200px; padding: 10px 0;">Productos en Caché Local</th>
+                                <td style="padding: 10px 0;">
+                                    <strong style="font-size: 16px;"><?php echo count($cached_products); ?> productos</strong> cargados actualmente.
+                                </td>
+                            </tr>
+                        </table>
 
-                <div style="margin-top: 20px;">
-                    <input type="submit" name="diplebill_sync_catalog" class="button button-secondary" value="1. Descargar / Sincronizar Catálogo de DipleBill" />
-                    <span style="margin: 0 10px;">y luego</span>
-                    <input type="submit" name="diplebill_run_import" class="button button-primary" value="2. Crear / Actualizar Productos en WooCommerce" />
+                        <form method="post" action="">
+                            <?php wp_nonce_field('diplebill_woo_import_nonce'); ?>
+                            <input type="submit" name="diplebill_sync_catalog" class="button button-secondary button-large" value="Sincronizar Catálogo de DipleBill" />
+                        </form>
+                    </div>
+
+                    <?php if (!empty($cached_products)) : ?>
+                        <!-- Paso 2 -->
+                        <div class="diplebill-step-card" style="background: #fff; padding: 20px; border: 1px solid #ccd0d4; border-radius: 4px; margin-bottom: 20px; box-shadow: 0 1px 1px rgba(0,0,0,.04);">
+                            <h2>Paso 2: Mapeo de Productos (Asociación Manual Opcional)</h2>
+                            <p>Asocia los productos de tu WooCommerce con el SKU correcto de DipleBill. Si no asocias un producto, se emparejará automáticamente por el SKU por defecto.</p>
+                            
+                            <?php
+                            $paged = isset($_GET['paged']) ? intval($_GET['paged']) : 1;
+                            $woo_products = new WP_Query([
+                                'post_type' => ['product', 'product_variation'],
+                                'posts_per_page' => 20,
+                                'paged' => $paged
+                            ]);
+                            ?>
+                            <form method="post" action="">
+                                <?php wp_nonce_field('diplebill_woo_mappings_nonce'); ?>
+                                <table class="wp-list-table widefat fixed striped" style="margin-bottom: 15px;">
+                                    <thead>
+                                        <tr>
+                                            <th style="width: 40%;">Producto WooCommerce (Web)</th>
+                                            <th style="width: 20%;">SKU Web</th>
+                                            <th style="width: 40%;">Producto Asociado de DipleBill POS</th>
+                                        </tr>
+                                    </thead>
+                                    <tbody>
+                                        <?php if ($woo_products->have_posts()) : while ($woo_products->have_posts()) : $woo_products->the_post(); 
+                                            $product = wc_get_product(get_the_ID());
+                                            if (!$product) continue;
+                                            $current_mapped = get_post_meta($product->get_id(), '_diplebill_mapped_sku', true);
+                                            ?>
+                                            <tr>
+                                                <td><strong><?php echo esc_html($product->get_name()); ?></strong></td>
+                                                <td><code><?php echo esc_html($product->get_sku()); ?></code></td>
+                                                <td>
+                                                    <select name="diplebill_map[<?php echo $product->get_id(); ?>]" style="max-width: 100%; width: 350px;">
+                                                        <option value="">-- No asociado (Usar SKU predeterminado) --</option>
+                                                        <?php foreach ($cached_products as $dp) : ?>
+                                                            <option value="<?php echo esc_attr($dp['sku']); ?>" <?php selected($current_mapped, $dp['sku']); ?>>
+                                                                <?php echo esc_html($dp['name'] . ' (SKU: ' . $dp['sku'] . ')'); ?>
+                                                            </option>
+                                                        <?php endforeach; ?>
+                                                    </select>
+                                                </td>
+                                            </tr>
+                                        <?php endwhile; wp_reset_postdata(); else : ?>
+                                            <tr><td colspan="3">No se encontraron productos en WooCommerce.</td></tr>
+                                        <?php endif; ?>
+                                    </tbody>
+                                </table>
+                                
+                                <div class="tablenav" style="display: flex; justify-content: space-between; align-items: center;">
+                                    <div class="alignleft actions">
+                                        <input type="submit" name="diplebill_save_mappings" class="button button-secondary" value="Guardar Mapeos de esta Página" />
+                                    </div>
+                                    <div class="tablenav-pages">
+                                        <?php
+                                        echo paginate_links([
+                                            'base' => add_query_arg('paged', '%#%'),
+                                            'format' => '',
+                                            'prev_text' => __('&laquo; Anterior'),
+                                            'next_text' => __('Siguiente &raquo;'),
+                                            'total' => $woo_products->max_num_pages,
+                                            'current' => $paged
+                                        ]);
+                                        ?>
+                                    </div>
+                                </div>
+                            </form>
+                        </div>
+
+                        <!-- Paso 3 -->
+                        <div class="diplebill-step-card" style="background: #fff; padding: 20px; border: 1px solid #ccd0d4; border-radius: 4px; margin-bottom: 20px; box-shadow: 0 1px 1px rgba(0,0,0,.04);">
+                            <h2>Paso 3: Crear / Actualizar Productos en WooCommerce</h2>
+                            <p>Procesa los productos que están cargados en caché. Si el producto existe (por SKU coincidente o SKU mapeado), se actualizará su precio e inventario físico. Si no existe, se creará uno nuevo publicado.</p>
+                            
+                            <form method="post" action="">
+                                <?php wp_nonce_field('diplebill_woo_import_nonce'); ?>
+                                <input type="submit" name="diplebill_run_import" class="button button-primary button-large" value="Ejecutar Importación / Actualización Masiva" />
+                            </form>
+                        </div>
+                    <?php endif; ?>
                 </div>
-                
-                <p class="description" style="margin-top: 20px;">
-                    <strong>Nota Importante:</strong> El actualizador buscará conciencias por SKU. Si el producto existe, actualizará su precio e inventario físico correspondiente. Si no existe, creará un nuevo producto simple publicado.
-                </p>
-            </form>
-        <?php endif; // Cierre del else de configuración
-              endif; // Cierre de pestaña import ?>
+            <?php endif; // Cierre del else de configuración
+        endif; // Cierre de pestaña import ?>
     </div>
     <?php
 }
