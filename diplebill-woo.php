@@ -583,6 +583,19 @@ function diplebill_woo_render_settings_page() {
                                             $product = wc_get_product(get_the_ID());
                                             if (!$product) continue;
                                             $current_mapped = get_post_meta($product->get_id(), '_diplebill_mapped_sku', true);
+                                            
+                                            // Si no está mapeado aún, sugerimos/autocompletamos el mapeo si el SKU coincide
+                                            if (empty($current_mapped)) {
+                                                $woo_sku = strtolower(trim($product->get_sku()));
+                                                if (!empty($woo_sku)) {
+                                                    foreach ($cached_products as $dp) {
+                                                        if (strtolower(trim($dp['sku'])) === $woo_sku) {
+                                                            $current_mapped = $dp['sku'];
+                                                            break;
+                                                        }
+                                                    }
+                                                }
+                                            }
                                             ?>
                                             <tr>
                                                 <td><strong><?php echo esc_html($product->get_name()); ?></strong></td>
